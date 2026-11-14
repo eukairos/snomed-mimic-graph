@@ -1,0 +1,14 @@
+MATCH (search:Concept {id: '56717001'}) // tuberculosis, don't forget the quotes
+WITH search
+
+MATCH (p:Patient)-[:HAS_ADMISSION]->(a:Admission)-[:HAS_DIAGNOSIS]->(d:Diagnosis)-[:MAPPED_TO]->(c:Concept)-[:HAS_DESCRIPTION]->(desc:Description)
+
+MATCH path=(c)-[:IS_A*1..]->(search)
+
+RETURN DISTINCT 
+	p.subject_id AS Patient_ID, 
+	desc.term AS Condition,
+	length(path) AS Depth,
+	[n IN nodes(path) | n.id] AS Hierarchy
+
+LIMIT 1000

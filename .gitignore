@@ -1,0 +1,4 @@
+clinical_note_entries.json
+*.csv
+.env
+.ipynb_checkpoints/

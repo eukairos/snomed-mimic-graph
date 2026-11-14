@@ -1,0 +1,99 @@
+// Cypher script for loading MIMIC patients and admissions
+
+// Create constraints
+CREATE CONSTRAINT subject_id IF NOT EXISTS FOR (p:Patient) REQUIRE p.subject_id IS UNIQUE;
+CREATE CONSTRAINT hadm_id IF NOT EXISTS FOR (a:Admission) REQUIRE a.hadm_id IS UNIQUE;
+
+// Create indices
+CREATE INDEX subject_id_idx IF NOT EXISTS FOR (p:Patient) ON (p.subject_id);
+CREATE INDEX hadm_id_idx IF NOT EXISTS FOR (a:Admission) ON (a.hadm_id);
+CREATE INDEX snomed_cid_idx IF NOT EXISTS FOR (d:Diagnosis) ON (d.snomed_cid);
+CREATE INDEX service_idx IF NOT EXISTS FOR (s:Service) ON (s.curr_service);
+
+// Load the patients 
+LOAD CSV WITH HEADERS FROM 'file:///mimic_patients_age_gender.csv' AS row
+MERGE (p:Patient {subject_id:toInteger(row.subject_id)})
+ON CREATE SET
+	p.age = toInteger(row.age),
+	p.gender = row.gender
+
+// Load the admissions
+LOAD CSV WITH HEADERS FROM 'file:///mimic_admissions_small.csv' AS row
+CALL {
+	WITH row
+	MERGE (a:Admission {hadm_id:toInteger(row.hadm_id)})
+	ON CREATE SET
+		a.subject_id = toInteger(row.subject_id),
+    		a.admittime = apoc.date.parse(row.admittime, 'ms', 'yyyy-MM-dd HH:mm:ss'),
+    		a.dischtime = apoc.date.parse(row.dischtime, 'ms', 'yyyy-MM-dd HH:mm:ss')
+} IN TRANSACTIONS OF 5000 ROWS;
+
+
+// link patients and admissions
+LOAD CSV WITH HEADERS FROM 'file:///mimic_admissions_small.csv' AS row
+CALL (row) {
+  WITH row
+  // Match nodes using the correct properties
+  MATCH (p:Patient {subject_id: toInteger(row.subject_id)})
+  MATCH (a:Admission {hadm_id: toInteger(row.hadm_id)})
+
+  // Create the relationship
+  MERGE (p)-[:HAS_ADMISSION]->(a)
+} IN TRANSACTIONS OF 5000 ROWS;
+
+// Verify relationships were created
+MATCH (p:Patient)-[r:HAS_ADMISSION]->(a:Admission)
+RETURN p.subject_id, a.hadm_id, count(r) AS relationship_count
+LIMIT 10;
+
+// load diagnoses
+LOAD CSV WITH HEADERS FROM 'file:///mimic_diagnoses_small.csv' AS row
+CALL (row) {
+	WITH row
+	MERGE (d:Diagnosis {snomed_cid: row.snomed})
+	ON CREATE SET
+		d.hadm_id = toInteger(row.hadm_id)
+} IN TRANSACTIONS OF 10000 ROWS
+
+// link diagnoses to admissions
+LOAD CSV WITH HEADERS FROM 'file:///mimic_diagnoses_small.csv' AS row
+CALL (row) {
+	WITH row
+	MATCH (d:Diagnosis {snomed_cid: row.snomed})
+	MATCH (a:Admission {hadm_id: toInteger(row.hadm_id)})
+	MERGE (a)-[:HAS_DIAGNOSIS]->(d)
+} IN TRANSACTIONS OF 10000 ROWS;
+
+
+// load disciplines
+
+LOAD CSV WITH HEADERS FROM 'file:///mimic_disciplines.csv' AS row
+CALL (row) {
+	WITH ROW
+	MERGE (s:Service {service: row.curr_service})
+	ON CREATE SET
+		s.hadm_id = toInteger(row.hadm_id)
+} IN TRANSACTIONS OF 10000 ROWS; 
+
+// link disciplines to admissions
+LOAD CSV WITH HEADERS FROM 'file:///mimic_disciplines.csv' AS row
+CALL (row) {
+	WITH row
+	MATCH (s:Service {service: row.curr_service})
+	MATCH (a:Admission {hadm_id: row.hadm_id})
+	MERGE (a)-[:TO_SERVICE]->(s)
+} IN TRANSACTIONS OF 10000 ROWS;
+
+
+// Link diagnosis nodes to SNOMED concept nodes.
+
+CALL apoc.periodic.iterate(
+	'MATCH (d:Diagnosis) WHERE d.snomed_cid IS NOT NULL RETURN d',
+	'MATCH (s:Concept {id: d.snomed_cid})
+	MERGE (d)-[:MAPPED_TO]->(s)',
+	{batchSize: 10000, parallel: True}
+)
+
+
+
+

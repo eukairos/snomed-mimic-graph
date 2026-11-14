@@ -1,0 +1,166 @@
+// Cypher script for loading SNOMED files into Neo4j Desktop
+
+// Refer to the Jupyter notebook "Script to clean SNOMED files.ipynb' to download the SNOMED RF2 files and clean the files before loading into neo4j. 
+// Put the files from the output of the notebook into neo4j import directory. In my case it is <home>\.Neo4jDesktop2\Data\dbmss\dbms-xxxxxxx\import
+// If your PC/laptop RAM is < 32Gb, open the neo4j.conf file (see video https://youtu.be/OsyZ3kafnfs); find the Java heap statement, and configure heap size to at least 4G. On my PC with 64Gb RAM, running the load scripts doesn't crash the neo4j server.
+
+//=============================================================================================
+
+
+// Create constraints
+CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (c:Concept) REQUIRE c.id IS UNIQUE;
+CREATE CONSTRAINT description_id IF NOT EXISTS FOR (d:Description) REQUIRE d.id IS UNIQUE;
+
+
+// Create indexes
+CREATE INDEX concept_id_idx IF NOT EXISTS FOR (c:Concept) ON (c.id);
+CREATE INDEX description_id_idx IF NOT EXISTS FOR (d:Description) ON (d.id);
+CREATE INDEX rel_typeID_idx IF NOT EXISTS FOR ()-[r:RELATIONSHIP]-() ON r.typeId
+
+
+// Load concepts
+
+LOAD CSV WITH HEADERS FROM 'file:///snomed_concept.csv' AS row
+
+MERGE (c:Concept {id: row.id})
+ON CREATE SET
+    c.moduleId = row.moduleId,
+    // Use COALESCE to handle potentially empty/missing definitionStatusId
+    c.definitionStatusId = COALESCE(toInteger(row.definitionStatusId), null);
+
+
+// Load descriptions
+
+LOAD CSV WITH HEADERS FROM 'file:///snomed_description.csv' AS row
+
+CALL (row) {
+	WITH row
+	MERGE (d:Description {id: row.id})
+	ON CREATE SET
+		d.moduleId = toInteger(row.moduleId), 
+		d.conceptId = toInteger(row.conceptId),
+		d.typeId = toInteger(row.typeId), 
+		d.term = toString(row.term), 
+		d.caseSignificanceId = COALESCE(toInteger(row.caseSignificanceId), null)
+} IN TRANSACTIONS OF 5000 ROWS;
+
+
+// link concepts to descriptions
+
+LOAD CSV WITH HEADERS FROM 'file:///snomed_description.csv' AS row
+CALL (row) {
+	WITH row
+	MATCH (c:Concept {id: row.conceptId})
+	MATCH (d:Description {id: row.id})
+	MERGE (c)-[:HAS_DESCRIPTION]->(d)
+} IN TRANSACTIONS OF 5000 ROWS;
+
+
+
+// Load IS_A relationships among concepts
+
+LOAD CSV WITH HEADERS FROM 'file:///snomed_relationship.csv' AS row
+
+WITH row
+WHERE row.typeId = '116680003'           // IS A
+CALL {
+	WITH row
+	MATCH (source:Concept {id: row.sourceId}),(dest:Concept {id: row.destinationId})
+	MERGE (source)-[r:IS_A]->(dest)
+	SET 
+		r.moduleId = row.moduleId,
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+} IN TRANSACTIONS OF 5000 ROWS
+
+
+ 
+// Load attribute relationships
+
+LOAD CSV WITH HEADERS FROM 'file:///snomed_relationship.csv' AS row
+MATCH (source:Concept {id: row.sourceId})
+MATCH (dest:Concept {id: row.destinationId})
+
+CALL  {
+  
+  WITH source, dest, row
+  
+  // Finding site (most common)
+  WITH source, dest, row
+  WHERE row.typeId = '363698007'  // Finding site
+  MERGE (source)-[r:FINDING_SITE {typeId: '363698007'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row  // continue chain for next type
+  WHERE row.typeId = '116676008'  // Associated morphology
+  MERGE (source)-[r:ASSOCIATED_MORPHOLOGY {typeId: '116676008'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row
+  WHERE row.typeId = '246075003'  // Causative agent
+  MERGE (source)-[r:CAUSATIVE_AGENT {typeId: '246075003'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row
+  WHERE row.typeId = '263502005'  // Clinical course
+  MERGE (source)-[r:COURSE {typeId: '263502005'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row
+  WHERE row.typeId = '246456000'  // Episodicity
+  MERGE (source)-[r:EPISODICITY {typeId: '246456000'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row
+  WHERE row.typeId = '370135005'  // Pathological process
+  MERGE (source)-[r:PATHOLOGICAL_PROCESS {typeId: '370135005'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row
+  WHERE row.typeId = '246454002'  // Occurrence (e.g. neonatal, congenital)
+  MERGE (source)-[r:OCCURRENCE {typeId: '246454002'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row
+  WHERE row.typeId = '246112005'  // Severity
+  MERGE (source)-[r:SEVERITY {typeId: '246112005'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row
+  WHERE row.typeId = '363713009'  // Has interpretation
+  MERGE (source)-[r:HAS_INTERPRETATION {typeId: '363713009'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  WITH source, dest, row
+  WHERE row.typeId = '363714003'  // Interprets
+  MERGE (source)-[r:INTERPRETS {typeId: '363714003'}]->(dest)
+  ON CREATE SET r.moduleId = row.moduleId, 
+		r.relationshipGroup = row.relationshipGroup,
+		r.characteristicTypeId = row.characteristicTypeId
+
+  // Add more as needed — these 10 cover >95% of clinical use
+} IN TRANSACTIONS OF 5000 ROWS
+
+
+
+
+
+
